@@ -48,7 +48,8 @@ class Bot(commands.Bot):
     def on_message(mqttc, userdata, msg):
         payload = eval(msg.payload.decode('utf-8'))
         if payload['author'] != "None":
-            Bot.msgq.append(f"[YouTube] {payload['author']}: {payload['msg']}")
+            if "[Twitch]" not in payload['msg']:
+                Bot.msgq.append(f"[YouTube] {payload['author']}: {payload['msg']}")
         else:
             Bot.msgq.append(payload['msg'])
 
@@ -128,10 +129,12 @@ class Bot(commands.Bot):
         if usr_perm == 0 and arg == 'start':
             self.send_yt_msgs.start()
             self.twitterandgithub.start()
+            self.refreshsongsource.start()
             await ctx.send("The Geekbot is listening. Connecting to YouTube.")
         elif usr_perm == 0 and arg == 'stop':
             self.send_yt_msgs.stop()
             self.twitterandgithub.stop()
+            self.refreshsongsource.stop()
             await ctx.send("The Geekbot is now offline.")
 
     @routine(seconds=1)
@@ -155,6 +158,10 @@ class Bot(commands.Bot):
         elif self.tw_or_gh == False:
             loop.create_task(chan.send(f"Want a closer look at the code you see on this Stream? Want to contribute to the Buttonbox? Follow John on Github https://github.com/unwisegeek"))
             self.tw_or_gh = True
+
+    @routine(seconds=15)
+    async def refreshsongsource(self):
+        r = requests.get(f"http://{API_HOST}:{API_PORT}/api/refreshsongsource")
 
 bot = Bot()
 bot.run()
