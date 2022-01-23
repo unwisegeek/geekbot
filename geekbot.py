@@ -1,4 +1,4 @@
-from twitchio.ext import commands
+from twitchio.ext import eventsub, commands
 from twitchio.ext.routines import routine
 import paho.mqtt.client as mqtt
 import paho.mqtt.publish as publish
@@ -73,7 +73,11 @@ class Bot(commands.Bot):
     async def event_ready(self):
         print(f"{BOT_NICK} is online and connecting to Twitch.")
 
+    async def event_raw_usernotice(self, message, channel=['theunwisegeek']):
+        print(message)
+
     async def event_message(self, message):
+        print(message.raw_data)
         if f"{BOT_NICK}!{BOT_NICK}@{BOT_NICK}" in message.raw_data:
             author = "6E3KBot"
             color = "FFD700"
