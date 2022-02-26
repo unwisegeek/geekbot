@@ -7,11 +7,14 @@ import json
 import asyncio
 import espeak
 from config import *
+from Geekle import Geekle
+from mycroft_bus_client import MessageBusClient, Message
 
 class Bot(commands.Bot):
     online = False
     msgq = []
     tw_or_gh = "firstrun"
+    game_in_progress = False
     def __init__(self):
         super().__init__(token=TMI_TOKEN, prefix=BOT_PREFIX, initial_channels=CHANNEL)
 
@@ -20,12 +23,10 @@ class Bot(commands.Bot):
         mqttc.on_connect = Bot.on_connect
         mqttc.on_message = Bot.on_message
 
-        # Connect bot to espeak
-        espeak.init()
-        voice = espeak.Espeak()
-        voice.rate = 125
-        voice.voice = {"language": "mb-us2"}
-        voice.say("The Geekbot is online.")
+        # Connect bot to Mycroft
+        self.mycroft = MessageBusClient()
+        self.mycroft.run_in_thread()
+        self.say("The Geekbot is online.")
 
         if MQTT_AUTH == None:
             mqttc.username_pw_set(
@@ -40,6 +41,14 @@ class Bot(commands.Bot):
         mqttc.connect(MQTT_HOST, MQTT_PORT)
         # Non-Blocking Loop
         mqttc.loop_start()
+
+    def say(self, msg):
+        self.mycroft.emit(Message('speak', data={'utterance': msg}))
+    
+    def chat(self, msg):
+        chan = self.get_channel("theunwisegeek")
+        loop = asyncio.get_event_loop()
+        loop.create_task(chan.send(msg))
 
     def on_connect(mqttc, userdata, flags, rc):
         print(f"Connected to MQTT with result code {str(rc)}")
@@ -141,26 +150,103 @@ class Bot(commands.Bot):
             self.refreshsongsource.stop()
             await ctx.send("The Geekbot is now offline.")
 
+    @commands.command()
+    async def geekle(self, ctx: commands.Context, arg):
+        def handle_msgs(msg_list, game):
+            ALLOWED_TYPES = ('TEXT', 'SPEECH', 'WORD', 'PREV', 'STATUS')
+            for msg in msg_list:
+                if msg['type'] in ALLOWED_TYPES:
+                    if msg['type'] in ('TEXT', 'PREV', 'STATUS'):
+                        text = ""
+                        text += f"Previous Message: " if msg['type'] == 'PREV' else ""
+                        text += f"Status: " if msg['type'] == 'STATUS' else ""
+                        text += msg['msg']
+                        self.chat(text)
+                    if msg['type'] == 'SPEECH':
+                        self.say(msg['msg'])
+                    if msg['type'] == 'WORD':
+                        text = f"The word from this game was: {msg['msg']}"
+                        self.chat(text)
+                    if 'GUESS' in msg['type']:
+                        game.inturn = True
+                        self.geekleturn.start(game)
+                    if 'GAMEOVER' in msg['type']:
+                        self.inturn = False
+                        game = ""
+                        self.game_in_progress = False
+
+        usr = self.get_user_from_rawdata(ctx.message.raw_data)
+        usr_perm = self.get_perms(usr)
+        if arg == 'start':
+            if self.game_in_progress:
+                await ctx.send("There is a game already in progress. We cannot start another.")
+            else:
+                self.game_in_progress = True
+                self.new_game = Geekle()
+                game_status = self.new_game.start_game()
+                handle_msgs(game_status[1], self.new_game)
+        elif arg == 'cancel' or arg == 'stop':
+            if usr_perm <= 1:
+                self.game_in_progress == False
+                self.new_game = ""
+                self.say("The previous game of Geekle has been stopped.")
+                await ctx.send(f"{usr} has stopped the previous game of Geekle. Game on!")
+            else:
+                await ctx.send(f"{usr} does not have the permission to stop a game. Further attempts will result in trolls returning beneath bridges.")
+        elif arg == 'vote':
+            # Accept a vote from each person per turn (no multiple votes, Monica)
+            ## Routine to start the turn
+            ## At completion of routine, send most voted to Geekle or send votes list to John
+            ## Start a new turn
+            # Vote must be timeboxed for 2.5 minutes
+            if self.new_game.inturn:
+                results = self.new_game.process_guess(arg, usr)
+            else:
+                await ctx.send(f"There is no voting open at the moment, {usr}.")
+        elif arg == 'status':
+            self.handle_msgs(self.new_game.get_status()[1])
+        elif arg == 'prev':
+            prev = self.new_game.get_previous()
+            self.handle_msgs(prev[1])
+        elif arg == 'tiebreak':
+            if arg in self.new_game.final_votes:
+                self.new_game.process_vote(arg)
+            else:
+                self.say("That was not one of the votes, John. Try again.")
+                self.chat("That was not one of the votes, John. Try again.")
+
+    @routine(seconds=180)
+    async def geekleturn(self, game):
+        if game.turnstep == 0:
+            game.turnstep = 1
+            pass
+        else:
+            game.final_votes = game.tally_votes()
+            if len(game.final_votes) > 1:
+                self.speak("There is a tie! John the Unwise Geek, break the tie.")
+                self.chat(f"There is a tie! John the Unwise Geek, break the tie using one of the following words: {votes}")
+            else:
+                game.process_vote(game.final_votes[0])
+            game.turnstep = 0
+            self.geekleturn.stop()
+
+
     @routine(seconds=1)
     async def send_yt_msgs(self):
         if len(self.msgq) > 0:
-            chan = self.get_channel("theunwisegeek")
-            loop = asyncio.get_event_loop()
             for i in range(0, len(self.msgq)):
-                loop.create_task(chan.send(self.msgq.pop(0)))
+                self.chat(self.msgq.pop(0))
 
     @routine(minutes=30)
     async def twitterandgithub(self):
-        chan = self.get_channel("theunwisegeek")
-        loop = asyncio.get_event_loop()
         if self.tw_or_gh == True:
-            loop.create_task(chan.send(f"Follow John on Twitter! https://twitter.com/TheUnwiseGeek/"))
+            self.chat(f"Follow John on Twitter! https://twitter.com/TheUnwiseGeek/")
             self.tw_or_gh = False
         elif self.tw_or_gh == "firstrun":
             print("Skipping linkdrop for the first run.")
             self.tw_or_gh = False
         elif self.tw_or_gh == False:
-            loop.create_task(chan.send(f"Want a closer look at the code you see on this Stream? Want to contribute to the Buttonbox? Follow John on Github https://github.com/unwisegeek"))
+            self.chat(f"Want a closer look at the code you see on this Stream? Want to contribute to the Buttonbox? Follow John on Github https://github.com/unwisegeek")
             self.tw_or_gh = True
 
     @routine(seconds=15)
