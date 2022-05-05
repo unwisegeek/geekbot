@@ -9,6 +9,8 @@ import espeak
 from config import *
 from Geekle import Geekle
 from mycroft_bus_client import MessageBusClient, Message
+import os
+from time import time
 
 class Bot(commands.Bot):
     online = False
@@ -143,6 +145,7 @@ class Bot(commands.Bot):
             self.send_yt_msgs.start()
             self.twitterandgithub.start()
             self.refreshsongsource.start()
+            self.geeklecron.start()
             await ctx.send("The Geekbot is listening. Connecting to YouTube.")
         elif usr_perm == 0 and arg == 'stop':
             self.send_yt_msgs.stop()
@@ -152,9 +155,21 @@ class Bot(commands.Bot):
 
     @commands.command()
     async def geekle(self, ctx: commands.Context, arg):
-        def handle_msgs(msg_list, game):
+        def handle_msgs(msg, game):
+            step = msg[0]
+            msg_list = msg[1]
             ALLOWED_TYPES = ('TEXT', 'SPEECH', 'WORD', 'PREV', 'STATUS')
             for msg in msg_list:
+                print(msg)
+                if 'GUESS' in step:
+                    game.inturn = True
+                    with open('geeklecron', 'w') as f:
+                        f.write(str(time()))
+                if 'GAMEOVER' in msg['type']:
+                    self.inturn = False
+                    
+                    self.game_in_progress = False
+
                 if msg['type'] in ALLOWED_TYPES:
                     if msg['type'] in ('TEXT', 'PREV', 'STATUS'):
                         text = ""
@@ -167,68 +182,68 @@ class Bot(commands.Bot):
                     if msg['type'] == 'WORD':
                         text = f"The word from this game was: {msg['msg']}"
                         self.chat(text)
-                    if 'GUESS' in msg['type']:
-                        game.inturn = True
-                        self.geekleturn.start(game)
-                    if 'GAMEOVER' in msg['type']:
-                        self.inturn = False
-                        game = ""
-                        self.game_in_progress = False
 
         usr = self.get_user_from_rawdata(ctx.message.raw_data)
         usr_perm = self.get_perms(usr)
-        if arg == 'start':
+        print(arg)
+        if arg == 'go':
             if self.game_in_progress:
                 await ctx.send("There is a game already in progress. We cannot start another.")
             else:
                 self.game_in_progress = True
                 self.new_game = Geekle()
                 game_status = self.new_game.start_game()
-                handle_msgs(game_status[1], self.new_game)
+                handle_msgs(game_status, self.new_game)
         elif arg == 'cancel' or arg == 'stop':
             if usr_perm <= 1:
-                self.game_in_progress == False
+                self.game_in_progress = False
                 self.new_game = ""
                 self.say("The previous game of Geekle has been stopped.")
                 await ctx.send(f"{usr} has stopped the previous game of Geekle. Game on!")
             else:
                 await ctx.send(f"{usr} does not have the permission to stop a game. Further attempts will result in trolls returning beneath bridges.")
-        elif arg == 'vote':
-            # Accept a vote from each person per turn (no multiple votes, Monica)
-            ## Routine to start the turn
-            ## At completion of routine, send most voted to Geekle or send votes list to John
-            ## Start a new turn
-            # Vote must be timeboxed for 2.5 minutes
-            if self.new_game.inturn:
-                results = self.new_game.process_guess(arg, usr)
-            else:
-                await ctx.send(f"There is no voting open at the moment, {usr}.")
         elif arg == 'status':
-            self.handle_msgs(self.new_game.get_status()[1])
+            handle_msgs(self.new_game.get_status(), self.new_game)
         elif arg == 'prev':
             prev = self.new_game.get_previous()
-            self.handle_msgs(prev[1])
+            handle_msgs(prev, self.new_game)
         elif arg == 'tiebreak':
             if arg in self.new_game.final_votes:
                 self.new_game.process_vote(arg)
             else:
                 self.say("That was not one of the votes, John. Try again.")
                 self.chat("That was not one of the votes, John. Try again.")
-
-    @routine(seconds=180)
-    async def geekleturn(self, game):
-        if game.turnstep == 0:
-            game.turnstep = 1
-            pass
         else:
-            game.final_votes = game.tally_votes()
-            if len(game.final_votes) > 1:
-                self.speak("There is a tie! John the Unwise Geek, break the tie.")
-                self.chat(f"There is a tie! John the Unwise Geek, break the tie using one of the following words: {votes}")
-            else:
-                game.process_vote(game.final_votes[0])
-            game.turnstep = 0
-            self.geekleturn.stop()
+            # Accept a vote from each person per turn (no multiple votes, Monica)
+            ## Routine to start the turn
+            ## At completion of routine, send most voted to Geekle or send votes list to John
+            ## Start a new turn
+            # Vote must be timeboxed for 2.5 minutes
+            try:
+                if self.new_game.inturn:
+                    result = self.new_game.process_guess(arg, usr)
+                    handle_msgs(result, self.new_game)
+            except AttributeError:
+                pass
+
+    @routine(seconds=1)
+    async def geeklecron(self):
+        try:
+            game = self.new_game
+            turntime = 30.0
+            if os.path.exists('geeklecron'):
+                with open('geeklecron', 'r') as f:
+                    crontime = float(f.read().strip('\n'))
+                    if time() >= crontime + turntime:
+                        game.final_votes = game.tally_votes()
+                        if len(game.final_votes) > 1:
+                            self.speak("There is a tie! John the Unwise Geek, break the tie.")
+                            self.chat(f"There is a tie! John the Unwise Geek, break the tie using one of the following words: {game.final_votes}")
+                        else:
+                            game.process_vote(game.final_votes[0])
+                        os.remove('geeklecron')
+        except AttributeError:
+            pass
 
 
     @routine(seconds=1)

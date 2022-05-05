@@ -148,8 +148,12 @@ class Geekle:
         else:
             msg += f"{usr}: Error. A vote has already been recorded for you."
         if passed:
+            msg += f"Registering your vote for {guess}, {usr}!"
             self.votes += [ (usr, guess) ]
-        return ('PROC', [self.make_msg(msg, 'TEXT')])
+        msg_list = [
+            self.make_msg(msg, 'TEXT')
+            ]
+        return ('PROC', msg_list)
 
     def tally_vote(self):
         votes = {}
