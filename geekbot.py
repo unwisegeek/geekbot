@@ -26,7 +26,10 @@ class Bot(commands.Bot):
         mqttc.on_message = Bot.on_message
 
         # Connect bot to Mycroft
-        self.mycroft = MessageBusClient()
+        if MYCROFT_HOST != None:
+            self.mycroft = MessageBusClient(host=MYCROFT_HOST)
+        else:
+            self.mycroft = MessageBusClient()
         self.mycroft.run_in_thread()
         self.say("The Geekbot is online.")
 
